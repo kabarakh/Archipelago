@@ -405,7 +405,9 @@ if not is_frozen():
 
         from worlds import AutoWorldRegister
         from worlds.Files import APWorldContainer
-        from Launcher import open_folder
+        # open_folder is defined earlier in this same module (see above) -- this used to import it
+        # from Launcher, which doesn't define it, breaking every invocation of "Build APWorlds"
+        # (with or without --skip_open_folder, since the bad import runs unconditionally).
 
         import argparse
         parser = argparse.ArgumentParser(prog="Build APWorlds", description="Build script for APWorlds")
