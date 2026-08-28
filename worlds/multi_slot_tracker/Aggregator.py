@@ -24,6 +24,10 @@ class DashboardData:
         return sum(s.in_logic_open or 0 for s in self.slots if s.error is None)
 
     @property
+    def total_hinted_in_logic(self) -> int:
+        return sum(s.hinted_in_logic for s in self.slots if s.error is None)
+
+    @property
     def restricted_count(self) -> int:
         """Slots where no logic numbers could be computed at all (compat == "yaml_required" or
         "unknown_game", or any other hard error)."""

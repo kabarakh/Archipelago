@@ -44,6 +44,12 @@ class SlotSnapshot:
     received_items: list[NetworkItem]
     slot_data: dict | None
     source: Literal["live", "poll"]
+    # Location ids hinted (by anyone) *for this slot's own checks* and not yet checked -- see
+    # PollSource._snapshot_from() for why this needs to filter on finding_player specifically, not
+    # just "this slot's hint list" (that list is bidirectional: it also includes hints this slot
+    # itself *received* about other players' locations, which aren't about this slot's own checks
+    # at all and would be wrong to count here).
+    hinted_not_found_locations: set[int] = field(default_factory=set)
 
 
 class SlotFetchError(Exception):
@@ -145,6 +151,19 @@ class PollSource:
         )
         received_items = [NetworkItem(*item) for item in received_raw]
 
+        # Hint tuples are NetUtils.Hint, serialized as plain JSON arrays in field-declaration order:
+        # [receiving_player, finding_player, location, item, found, entrance, item_flags, status].
+        # The server stores each hint under *both* the finding player's and the receiving player's
+        # own entry (MultiServer.notify_hints), so tracker_data["hints"]'s entry for `slot_id` is a
+        # mix of hints *about* this slot's locations and hints this slot merely *received* about
+        # someone else's -- must filter on finding_player == slot_id (index 1) to get only the
+        # former, and on found == False (index 4) since a found hint's location is already checked.
+        hint_entries = next(
+            (entry["hints"] for entry in tracker_data["hints"] if entry["player"] == slot_id),
+            [],
+        )
+        hinted_not_found = {hint[2] for hint in hint_entries if hint[1] == slot_id and not hint[4]}
+
         return SlotSnapshot(
             slot_id=slot_id,
             slot_name=self._slot_name(slot_id, tracker_data),
@@ -154,6 +173,7 @@ class PollSource:
             received_items=received_items,
             slot_data=None,  # fetched lazily via fetch_slot_data()/fetch_all_slot_data(); heavier endpoint
             source="poll",
+            hinted_not_found_locations=hinted_not_found,
         )
 
     def get_snapshot(self, slot_id: int) -> SlotSnapshot:

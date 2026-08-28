@@ -6,14 +6,40 @@ slot: how many checks are open and in logic, how many are out of logic but techn
 
 This is a `hidden` apworld -- not a playable game. It registers itself in the Archipelago launcher
 the same way [Universal Tracker](../../tracker/) does, and **requires UT to be installed**, since it
-reuses UT's `TrackerCore` for all logic computation instead of reimplementing it. Launching it opens
-a standalone Kivy/KivyMD window (`KivyUI.py`), styled consistently with the rest of Archipelago's
-clients (`kvui.ThemedApp`) -- it's its own app rather than a `GameManager` tab, since `GameManager`
-assumes a single live server connection (connect bar, hints tab); this tool instead polls many
-*other* players' slots at once, which doesn't fit that model.
+reuses UT's `TrackerCore` for all logic computation instead of reimplementing it.
+
+Launching it opens a small Kivy/KivyMD launcher window (`KivyUI.py`, styled consistently with the
+rest of Archipelago's clients via `kvui.ThemedApp`) whose only job is to start a local HTTP server
+and open the actual dashboard in your browser -- the dashboard itself (room input, slot picker,
+filters, metrics, slot list) is a small Vue app served from that server, not a Kivy layout. This
+replaced an earlier all-Kivy dashboard after repeated KivyMD layout bugs there (rows overlapping
+neighbors, a label wrap silently growing a row past its container) made it too fragile to keep
+maintaining -- see `multi-slot-tracker-implementation-plan.md`'s "pivoted the dashboard from Kivy to
+a browser UI" entry for the full history. If the launcher window is closed, or the browser tab loses
+its connection to it, the dashboard shows a clear "Lost connection" overlay rather than silently
+freezing.
 
 Design background: see `archipelago-multi-slot-tracker-design.md` and
 `multi-slot-tracker-implementation-plan.md` at the repo root.
+
+## Working on the browser dashboard (`multi_slot_tracker_webui/`)
+
+The dashboard's source lives in `multi_slot_tracker_webui/` at the repo root -- a normal Vite + Vue
+3 project, *not* part of this apworld package (its `node_modules/`, `src/`, `package.json`, ... must
+never end up inside a built `.apworld`, only its **built output** does):
+
+```bash
+cd multi_slot_tracker_webui
+npm install
+npm run dev     # local dev server with hot reload, proxies /api/* to a real backend on :8422
+npm run build   # writes straight into worlds/multi_slot_tracker/webui/dist/ -- rebuild after any change
+```
+
+`worlds/multi_slot_tracker/webui/dist/` is gitignored (the repo's blanket `dist/` rule) and must be
+rebuilt by CI before packaging -- see `.github/workflows/build-multi-slot-tracker.yml`'s "Build the
+browser dashboard" step. The Python backend (`WebServer.py`) just serves whatever's on disk there on
+every request, so a frontend-only change only needs a rebuild + a browser refresh, no app restart;
+changing `WebServer.py`/`Client.py` itself needs the app relaunched, same as any other Python change.
 
 ## Status
 
@@ -47,6 +73,9 @@ Deliberately minimal -- see above for why room/slot state isn't among them.
   server, not a specific room.
 - `poll_interval_seconds`: how often to re-poll (default 30).
 - `player_files_path`: reserved for a future YAML-based fallback; unused by the poll source.
+- `webui_port`: local port the browser dashboard is served on (default 8422). If it's already taken,
+  the next free port is picked automatically and shown in the launcher window -- this is only the
+  preferred/starting port, not a guarantee.
 
 ## Using it
 

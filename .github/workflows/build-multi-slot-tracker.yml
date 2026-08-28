@@ -20,6 +20,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: multi_slot_tracker_webui/package-lock.json
+
+      - name: Build the browser dashboard (Vue)
+        # multi_slot_tracker_webui/ is a standalone dev project, not part of the apworld package --
+        # its vite.config.js writes straight into worlds/multi_slot_tracker/webui/dist/, which *is*
+        # part of the package. That dist/ folder is gitignored (repo's blanket "dist/" rule), so it
+        # must be built here every run rather than assumed to already be present from a checkout.
+        working-directory: multi_slot_tracker_webui
+        run: |
+          npm ci
+          npm run build
+
       - name: Set up Python
         uses: actions/setup-python@v6.2.0
         with:

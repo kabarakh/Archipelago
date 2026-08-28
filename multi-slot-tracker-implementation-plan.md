@@ -255,6 +255,64 @@ Still open / worth flagging to the user:
 - No automated tests added for `KivyUI.py`/the new `Client.py` flow -- this was all verified by
   actually running the app (smoke tests + real-room runs + window screenshots), not a test suite.
 
+## Update 2026-08-28 (real-YAML path + redraw, round 2): copied real Kaba YAMLs, tested thoroughly
+
+User request: copy the real `Kaba*.yaml` files from their live installation's `Players` folder into
+this dev checkout, then test the redraw/flicker behavior against all 33 Kaba slots in the real room
+with those YAMLs present. User then stepped away and asked for thorough autonomous testing until the
+behavior was correct. Found and fixed several more real issues, all verified live:
+
+1. **`build_yaml_launch_core()` regenerates from every YAML in the folder, not just selected
+   slots.** Confirmed by watching real log output: `run_generator(None, None)` builds one joint
+   multiworld from literally every YAML file present in `player_files_path`, regardless of which
+   slots the user selected in the picker. With 37 real YAMLs copied in, this is a genuinely
+   expensive operation (tens of seconds), and needing 2-3 exclusion rounds (see below) multiplies
+   that. This explains why early observations during this round looked like "only one slot ever
+   updates" -- it wasn't a bug, later screenshots (after waiting long enough) showed all 33 slots
+   populated correctly. Documented here so a future reader doesn't re-diagnose the same non-bug.
+2. **Cross-cycle caching for known-bad YAMLs.** The exclusion-retry loop from the previous round
+   worked correctly *within* one `build_yaml_launch_core()` call, but every fresh call (i.e. every
+   poll cycle) re-discovered the same persistently-bad files from scratch, paying for a full doomed
+   attempt each time before excluding them again. Verified live: `KabaTimespinner.yaml` (world
+   version mismatch) and `KabaSpyro2.yaml`/`KabaSpyro3.yaml` (Spyro 2/3's own "gemsanity set to
+   full" hard option-validation error, unrelated to the version issue -- a second, structurally
+   different failure class that needed generalizing `_find_bad_identifiers` to also match
+   `AutoWorld.py`'s "Exception in ... for player N, named X." wrapper text, not just
+   `Generate.py`'s "File ... document #N" YAML-parse-time message) kept getting rediscovered every
+   cycle. Fixed with `_known_bad_yaml_cache` (module-level, keyed by `player_files_path`): once a
+   file is known bad, every subsequent call pre-filters it out before the first attempt. Verified:
+   after the fix, the "excluding" log line count stayed flat across multiple full poll cycles
+   instead of growing by 2-3 every cycle.
+3. **Row order instability caused spurious full-list rebuilds.** Even with the per-row in-place
+   update fix from the previous round, `data.slots`'s raw order varies cycle to cycle (Client.py
+   builds it from a mix of a parallel pool for yaml-less slots and a sequential loop for
+   real-YAML slots, so completion order isn't stable), which made `order != self._last_rendered_order`
+   true on nearly every refresh even when every individual slot's data was byte-identical --
+   forcing `rows_box.clear_widgets()` + full re-add regardless of the per-row caching. Fixed by
+   sorting `slots` by `slot_name.lower()` in `_render()` before comparing/rendering, giving a
+   stable, human-friendly (alphabetical) order that only changes when the actual slot *set*
+   changes. Verified live: two consecutive successful poll cycles with identical underlying data
+   produced pixel-identical row order in back-to-back screenshots.
+
+## Update 2026-08-28 (feature): user-selectable sort
+
+User request: an optional sort, with "Name descending" and "Open checks ascending" specifically
+named. Added a "Sort: ..." dropdown to the filter row (`_SORT_OPTIONS` in `KivyUI.py`) with four
+options: Name (A-Z) [default, matches the previous hardcoded behavior], Name (Z-A), Open checks
+(low-high), Open checks (high-low) -- "open checks" = `total_locations - checked`, not `checked`
+itself. `_render()` now always sorts by whichever of these is selected (never falls back to
+`data.slots`'s raw, unstable order -- see the update above on why that mattered for the redraw
+fix). Verified with a small standalone script exercising all four modes against three synthetic
+slots with distinct names and open-check counts -- each produced the expected order.
+
+End-to-end result verified against the real room with real YAMLs: 33/33 selected Kaba slots
+computed, 3 correctly reported as restricted (`KabaHK` -- known datapackage/version mismatch
+limitation, unrelated to this session's code; `KabaSpyro2`/`KabaSpyro3` -- real "gemsanity" option
+errors in their own YAMLs), stable metrics (`Checks open 12511`, `Of which in logic 454`,
+`Restricted 3`) reproduced identically across multiple poll cycles, alphabetical row order stable
+across cycles, and (per the earlier round's instrumented test, whose underlying mechanism is
+unchanged here) zero `rows_box` mutation for polls where nothing actually changed.
+
 ## Update 2026-08-28 (later still): startup gating + a real perf bug
 
 Two more rounds of live user feedback while watching the actual running window, both fixed:
@@ -345,7 +403,7 @@ per render, down from what full unconditional rebuilds would have cost every sin
 against the real room afterward (screenshot in transcript): loads and updates smoothly with no
 observed input lag during active computation.
 
-## Update 2026-08-28 (last): CI packaging workflow
+## Update 2026-08-28: CI packaging workflow
 
 Added [.github/workflows/build-multi-slot-tracker.yml](.github/workflows/build-multi-slot-tracker.yml):
 on `release: published` (or manual `workflow_dispatch`), packages `worlds/multi_slot_tracker` into
@@ -374,3 +432,299 @@ apworld locally afterward, inspected the resulting zip -- correct folder name
 an uncommitted local change like everything else in this session (`worlds/LauncherComponents.py`
 shows as modified in `git status`) -- flag to the user in case they want to upstream it separately
 from the apworld itself.
+
+## Update 2026-08-28 (last): filter/status layout overlap was a stale-process artifact; added missing error banner
+
+**Filter-row overlap ("die filter und statusanzeige sehen nicht gut aus, überlagern sich"):**
+turned out to have TWO separate causes stacked on top of each other, only one of which was a real
+code bug:
+
+1. **Not a code bug at all**: every one of the 3 previous fix attempts (splitting the filter row in
+   two, `style="outlined"`/`elevation=0` on the toggles, explicit `height=dp(40)` on the toggles) was
+   screenshotted against a `python.exe` process that had never actually been killed -- `Stop-Process`
+   appeared to succeed but a background python instance (PID confirmed via `Get-Process python |
+   Select StartTime`, timestamp matched the *original* buggy launch, not any later edit) was still
+   serving every "fresh" screenshot. All 4 screenshots (baseline + 3 fix attempts) were pixel-identical
+   because none of them were ever looking at the edited code. Confirmed by explicitly checking
+   `Get-Process python` returned zero results before relaunching, then diffing process start-time
+   against file edit time.
+2. **A real bug**, found only after actually looking at freshly-launched code: the error banner added
+   in this same update (see below) initially rendered as a huge empty-looking red bar even with no
+   error text -- see next section, this is what "filters overlapping the status display" was actually
+   showing once the stale-process issue was eliminated. With that fixed, the original 3-fix-attempt
+   layout (two filter rows + metrics row) turned out to already be correct -- verified via
+   [KivyUI.py](worlds/multi_slot_tracker/KivyUI.py) idle-state screenshot: room row, error banner
+   (collapsed), title/header row, both filter rows, and the 4 metrics cards all render with clean
+   separation, no overlap.
+
+**Missing error display ("eine fehler-anzeige bei invalider raum-id und/oder verbindungsproblemen
+fehlt")**: `Client.py`'s `on_room_submitted`/`fetch_slot_list` and `_poll_loop` caught `SlotFetchError`
+(bad room ID, network failure, room gone) and only ever `logger.error(...)`'d it -- nothing surfaced
+in the GUI, so a failed load just looked like the app doing nothing. Added an error banner to
+[KivyUI.py](worlds/multi_slot_tracker/KivyUI.py): `MultiSlotTrackerApp.show_error(message)` /
+`.clear_error()` (both `Clock.schedule_once`-marshaled, safe to call from the background poll
+thread like `push_dashboard`), backed by a `MDBoxLayout` (`error_banner`, `errorContainerColor`
+role, M3's actual error color pair -- added `"error"` to `_role_colors`) wrapping an `MDLabel`
+(`error_label`). Wired into [Client.py](worlds/multi_slot_tracker/Client.py): `fetch_slot_list`'s
+`except SlotFetchError` now also calls `app.show_error(...)`, as does `_poll_loop`'s `except
+SlotFetchError`/`except Exception` (mid-session connection drops, not just the initial load).
+`_submit_room` clears any previous error immediately on a new attempt; `_apply_dashboard` clears it
+on any successful push (so a transient error goes away once data starts flowing again).
+
+**Found and fixed a real bug while building the banner itself**: KivyMD's `adaptive_height` on a
+`Label` subclass only binds `height` to `texture_size` on *future changes* to it
+(`kivymd/uix/__init__.py::on_adaptive_height`) -- since an empty string's `texture_size` is already
+`(0, 0)` as the property's own default, that binding never actually fires on an initially-empty
+label, leaving `height` stuck at Kivy's generic `Widget` default of `100`. That 100px phantom height
+then inflated `error_banner`'s `minimum_height`, rendering as a big empty-looking red bar even with
+zero error text -- this is what looked like "the filter/status area overlapping" once the stale
+python-process issue above was ruled out. Fixed by explicitly setting `self.error_label.height = 0`
+right after construction, before it's added as `error_banner`'s child; all *subsequent* `show_error`/
+`clear_error` transitions genuinely change the text (and thus `texture_size` away from and back to
+`(0, 0)`), so the normal adaptive binding fires correctly from then on -- no further manual overrides
+needed.
+
+**Verified end-to-end** against the same real room (`RZ1KT7KtSQiGq2K2KXL6Qw`, all 33 `Kaba*` slots):
+idle state (no overlap, banner fully collapsed) -> invalid room ID submitted (banner shows the
+actual fetch error, correctly wrapped/sized, nothing else displaced) -> valid room loaded (banner
+clears, slot picker opens) -> Kaba slots selected and applied -> live dashboard with real numbers
+(33 slots watched, metrics/filters/rows all cleanly separated, no overlap anywhere).
+
+**Unrelated new observation, not yet investigated**: while testing the above, a recurring
+`Player's Yaml not in tracker's list` error appeared in the log for a handful of `yaml_required`
+slots each poll cycle (others succeeded normally). This looks like a real YAML-vs-live-room
+player-name mismatch in the shared-core matching logic (separate from the invalid/failing-YAML
+exclusion-retry logic, which only handles YAMLs that fail to *generate* at all, not ones that
+generate fine but don't match up with the room's own player list) -- flagging for a future session,
+not fixed here since it wasn't part of what was reported this round and didn't affect the layout.
+
+## Update 2026-08-28 (last): the overlap was real after all -- MetricCard label wrap on window resize
+
+The previous update's conclusion ("the layout was fine, it was just a stale process") turned out to
+be incomplete: the user sent a live screenshot crop still showing the toggle row visibly overlapping
+the metrics cards, from the exact fresh instance handed to them right after that update. Multiple
+verification passes (Python-side `minimum_height`/`pos` introspection, pixel-level probing of two
+independent screenshots with `PIL`) all showed a clean ~12dp gap in the idle-state default window
+size -- the bug only reproduces once the window is narrower than its default size.
+
+**Root cause**: [KivyUI.py](worlds/multi_slot_tracker/KivyUI.py)'s `MetricCard` labels are plain
+`MDLabel`s, and KivyMD's own `<MDLabel>` kv rule binds `text_size: (self.width, None)` by default --
+i.e. word-wrap is on unless something overrides it. `MetricCard` itself has `adaptive_height=True`
+(so *it* correctly grows to fit wrapped text), but the `metrics` row containing all four cards has a
+**fixed** `size_hint_y=None, height=dp(76)`. Kivy does not clip a child to its parent's box, so once
+the window narrows enough that a longer title like "Of which in logic" wraps to two lines, the now-
+taller card simply renders past the top edge of its fixed-height row, straight into the filter-toggle
+row sitting directly above it. Reproduced on demand via `MoveWindow` (resized the live window to
+500x639) -- confirmed both the failure at narrow width and that it's absent at the default 816x639.
+
+**Fix**: added `shorten=True, shorten_from="right"` to both of `MetricCard`'s labels (title and
+value) -- they now stay single-line and truncate with an ellipsis ("Slots w...") instead of wrapping,
+so the card's height no longer depends on window width at all. Verified: no overlap at 500px width
+(ellipsis kicks in correctly) or at the default 816px width (full text, unaffected).
+
+## Update 2026-08-28 (last): pivoted the dashboard from Kivy to a browser UI (Vue), after repeated layout bugs
+
+After several rounds of genuine Kivy/KivyMD layout bugs in the same area (rows overlapping neighbors,
+a label wrap silently growing a fixed-height row past its container -- see the two updates above),
+the user asked to stop fighting Kivy's layout system for this: reduce the Kivy window to a minimal
+launcher (one button, one status field with the URL to open) and move the actual dashboard to a
+browser UI built with Vue, developed with a real Vite dev setup rather than a vendored single-file
+build, with only the *built* JS/CSS ending up inside the packaged .apworld.
+
+**New project layout**:
+- **`multi_slot_tracker_webui/`** (repo root, sibling to `worlds/`, NOT part of the apworld package)
+  -- a normal Vite + Vue 3 (JS, not TS) project: `npm install`, `npm run dev` for local development
+  (proxies `/api/*` to the real Python backend on port 8422 so hot-reload works against live data),
+  `npm run build` for production. `vite.config.js` points `build.outDir` directly at
+  `../worlds/multi_slot_tracker/webui/dist` -- running the build writes straight into the packaged
+  location, no manual copy step. This directory (its `node_modules/`, `src/`, `package.json`, ...)
+  is local-only tooling and must never be committed into `worlds/multi_slot_tracker/` or bundled into
+  the .apworld -- only `worlds/multi_slot_tracker/webui/dist/`'s built output is.
+- **`worlds/multi_slot_tracker/WebServer.py`** (new): `SharedState` (thread-safe, holds available
+  slots, selection, per-slot last-known results, error) + a stdlib `http.server.ThreadingHTTPServer`
+  serving both the built static files (`webui/dist/`, with an SPA fallback to `index.html` for
+  unknown paths) and a small JSON API: `GET /api/state` (the entire frontend-needed snapshot in one
+  call), `POST /api/room`, `POST /api/selection`, `POST /api/refresh`. Binds to
+  `Settings.webui_port` (new setting, default 8422), falling back to an OS-assigned free port if
+  that one's taken.
+- **`worlds/multi_slot_tracker/Client.py`** (rewritten): identical poll-loop logic to before, just
+  writing into `WebServer.SharedState` instead of calling Kivy app methods (`push_dashboard`/
+  `show_error`/`set_available_slots` all became `SharedState` methods with the same names/shapes).
+  `launch()` now starts the web server, then a minimal `LauncherApp`.
+- **`worlds/multi_slot_tracker/KivyUI.py`** (rewritten, ~70 lines instead of ~600): `LauncherApp`
+  now just shows the URL in a read-only field, an "Open in browser" button
+  (`webbrowser.open(self.url)`), and auto-opens the browser once on startup. Still built on
+  `kvui.ThemedApp` for visual consistency with other Archipelago Kivy clients, per the original
+  requirement -- that part didn't change, only the *scope* of what's rendered in Kivy did.
+- **Vue app** (`multi_slot_tracker_webui/src/`): `App.vue` (room input, error banner, header, filter
+  dropdowns + condition toggle pills, metrics cards, slot list, 1s polling of `/api/state`),
+  `components/SlotPicker.vue` (search/select-visible/deselect-visible/apply/cancel), `MetricCard.vue`,
+  `SlotRow.vue`, `api.js` (thin fetch wrapper), `style.css` (dark theme, plain CSS custom properties
+  rather than a Material/KivyMD-style theme system).
+
+**Verified end-to-end** against the same real room (`RZ1KT7KtSQiGq2K2KXL6Qw`): `npm run build` ->
+launched the real `launch_client()` entry point -> Kivy launcher window opened -> browser auto-opened
+-> submitted the room -> slot picker auto-opened with real slot names -> applied a filtered
+selection -> live dashboard with real numbers, confirmed via both a real browser session and an
+automated one hitting the same backend.
+
+**Bugs found and fixed while building this** (all in the new code, not the ported poll-loop logic):
+
+1. **Picker selection silently reset itself ~1s after editing.** `SlotPicker.vue` had a `watch` on
+   `[props.available, props.initialSelection]` that re-seeded the local selection on every prop
+   change -- but `App.vue` polls `/api/state` every second and each poll produces a brand-new
+   `available_slots` array (even with identical content), so the watch fired on every tick and
+   quietly reset an in-progress "deselect visible" back to "everything selected" a moment later.
+   Reported live as "deselect visible looks like it undoes itself". Fixed by seeding the selection
+   once at component creation instead of reactively -- `v-if`-mounting a fresh `SlotPicker` instance
+   each time the dialog opens already gives the right "reseed once per opening" semantics without
+   needing a watch at all.
+2. **Sort label/key mismatch.** The "Open checks" sort was actually meant to sort by *checks in
+   logic* (`in_logic_open`), not total open checks (`total_locations - checked`) -- a
+   miscommunication from when this sort option was first requested, corrected on user feedback.
+   Fixed both the sort function and the dropdown labels ("Checks in logic (low-high/high-low)").
+3. **Dashboard flicker every poll cycle -- same root symptom as the old Kivy flicker, resurfaced in
+   the new backend.** `_poll_loop` starts a fresh `results = []` at the top of every poll cycle and
+   pushes it (throttled) as slots complete one by one; `SharedState.push_dashboard()` was replacing
+   its stored dashboard outright with whatever partial list that was, so the frontend -- which polls
+   every second -- saw the visible slot list genuinely shrink back down to the first slot or two to
+   finish, then grow back out, *every single poll interval*. Reported live as "the window keeps
+   fully reloading, briefly down to one row, then the rest comes back". Fixed by keying
+   `SharedState`'s storage by `slot_id` (`_results_by_id`) and *merging* each push into it rather
+   than replacing wholesale -- a slot not yet recomputed this cycle keeps showing its last known
+   values instead of disappearing; `snapshot()` filters that dict down to the currently active
+   selection at read time. `set_room_submitted()` (a genuinely new room) clears it, as it should.
+   Verified with a dedicated regression test simulating exactly this partial-push pattern across two
+   "poll cycles".
+4. **Initial slot picker UX**: on user request, changed the very-first (never-confirmed) picker to
+   start with nothing checked (rather than everything) and disabled Apply until at least one slot is
+   selected -- large rooms otherwise required deselecting ~200 slots by hand. Re-opening the picker
+   after a selection was already confirmed still correctly restores that selection (including
+   restoring "everything checked" if the user had previously confirmed "all slots" -- resolving the
+   backend's `selected_slot_ids: null` == "all" convention into an explicit array happens in
+   `App.vue`, not inside `SlotPicker.vue`, so the picker's own contract stays simple).
+5. **No feedback when the backend process itself is gone** (as opposed to a backend-*reported*
+   error like a bad room id, which already had a banner): added a full-page "Lost connection to
+   Multi Slot Tracker" overlay in `App.vue`, shown after 3 consecutive failed `/api/state` polls (a
+   couple of misses are tolerated first so one slow request doesn't flash it) and cleared
+   automatically once polling succeeds again. Verified live: killed the Python process while a
+   browser tab was open against it -- overlay appeared within ~3s; relaunched the process --
+   overlay cleared on its own within the next poll, no page reload needed.
+
+**Operationally**: since the backend just serves whatever's on disk in `webui/dist/` on every
+request (no caching), a frontend-only change only needs `npm run build` + a browser refresh -- no
+Python restart. A backend (`WebServer.py`/`Client.py`) change needs the actual app process
+restarted, same as before.
+
+## Update 2026-08-28 (last): webui missing from the real released .apworld -- zip-loaded packages can't use plain pathlib
+
+The user cut an actual GitHub release (`0.1.0`) and ran the real built `.apworld` for the first
+time -- and the webui was missing entirely. This is a real bug this whole session's testing never
+caught, because every single test so far ran against the **loose dev folder**
+(`worlds/multi_slot_tracker/` directly on disk), never the packaged `.apworld` a real user installs.
+
+**Root cause**: a `.apworld` is loaded via `zipimport` straight out of its zip file -- it is never
+extracted to a real directory first (`worlds/__init__.py`'s `WorldSource`/`zipimporter` handling).
+`WebServer.py`'s static file serving used `_DIST_DIR = Path(__file__).parent / "webui" / "dist"`
+with plain `pathlib.Path` reads (`.is_file()`, `.read_bytes()`) -- these only work against a real
+filesystem path. For a zip-loaded module, `__file__` points *into* the zip
+(`.../multi_slot_tracker.apworld/multi_slot_tracker/WebServer.py`), which plain `pathlib.Path`
+cannot read at all; it silently found nothing, so the server's own "webui build not found" fallback
+kicked in for every request.
+
+**Fix**: switched to `importlib.resources` (`resources.files(__package__) / "webui" / "dist"`) --
+the stdlib-blessed way to read a package's bundled files that works correctly whether the package
+sits on disk or inside a zip (backed by `zipfile.Path` for the zip case). The path-traversal guard
+in `_serve_static` also had to change: `zipfile.Path` has no `.resolve()`/`.parents` to lean on for
+a real-pathlib-style containment check, so it now validates the URL's path segments directly
+(rejects `..`, empty segments, backslashes) before ever joining them onto the resources root.
+
+**Verified against the real failure mode**, not just the dev folder: built the actual `.apworld`
+locally (`python Launcher.py "Build APWorlds" -- "Multi Slot Tracker"`), then loaded
+`WebServer._webui_dist_root()` from *inside* that zip via a real `zipimport` (temporarily moved the
+loose `worlds/multi_slot_tracker/` folder fully out of `worlds/` first, so only the zip-imported
+copy could register) -- confirmed `index.html` and the hashed JS/CSS assets all read correctly
+by byte count, and a made-up missing filename correctly reports `is_file() == False`. Also
+downloaded the actual broken `0.1.0` release asset and inspected it directly: the webui files
+*were* present in the zip (the CI "Build the browser dashboard" step worked fine) -- confirming this
+was purely the runtime read-path bug above, not a packaging/CI problem.
+
+Also removed a stray `worlds/multi_slot_tracker/webui/vendor/vue.global.prod.js` (~167KB) left over
+from the earlier abandoned vendored-Vue-without-a-build-step approach, before the user asked for a
+real Vite dev setup -- unused dead weight in every build since.
+
+**Not yet done**: the `0.1.0` release's attached asset is still the broken one; a new build needs to
+be attached (re-running the workflow against the fixed code would overwrite it via `--clobber` onto
+the same release, or a new release/tag works too) -- left to the user, per the standing rule that
+versioning is their call, not something to decide unilaterally.
+
+## Update 2026-08-29 (last): "hinted checks in logic" -- new per-slot and aggregate metric
+
+Added a `hinted_in_logic` count per slot: of the open+in-logic checks, how many have a not-yet-found
+hint on them (UT's own tracker highlights hinted locations in a distinct color, so this mirrors that
+concept here). Data flow, end to end:
+
+- **`DataSource.py`**: `SlotSnapshot` gains `hinted_not_found_locations: set[int]`. The webhost
+  tracker API's `hints` field is `[{team, player, hints: [Hint, ...]}, ...]`, one entry per player --
+  verified live against the same real room used all session: each `Hint` serializes as a plain JSON
+  array in `NetUtils.Hint`'s field order, `[receiving_player, finding_player, location, item, found,
+  entrance, item_flags, status]` (no custom encoder involved, tuples/IntEnum just fall out of
+  `json.dumps` naturally). Critically, a player's own `hints` entry is **bidirectional**
+  (`MultiServer.notify_hints` stores every hint under both the finding player's and the receiving
+  player's own key) -- it mixes hints *about that player's own locations* with hints that player
+  merely *received* about someone else's. `_snapshot_from` filters on `finding_player == slot_id`
+  (index 1) and `not found` (index 4) to get only the former; verified with a dedicated unit test
+  covering exactly this found/not-found and finder/receiver distinction.
+- **`LogicEngine.py`**: `SlotLogicResult` gains `hinted_in_logic: int`. `updateTracker()`'s
+  `in_logic_locations` is a list of location *names*; translated to ids via this slot's own
+  regenerated world's `location_name_to_id` (the reverse of `location_id_to_name`, already used
+  elsewhere in this function) and intersected with `snapshot.hinted_not_found_locations`.
+- **`Aggregator.py`**: `DashboardData.total_hinted_in_logic` (sums across non-errored slots, same
+  pattern as `total_in_logic`).
+- **`WebServer.py`**: threaded through the JSON payload (`dataclasses.asdict` already carries the
+  new per-slot field; `total_hinted_in_logic` added alongside the dashboard's other totals).
+- **Frontend**: a new "Hinted in logic N" pill per slot row (only shown when > 0, a new `--hinted-*`
+  violet badge color distinct from the existing positive/caution/accent/neutral roles), a "Hinted in
+  logic" metric card, and a matching "Has hinted checks" condition filter toggle -- mirrors the
+  existing in-logic/out-of-logic pattern exactly.
+
+Verified the parsing logic with a synthetic-data unit test (found/not-found and finder/receiver
+filtering); a live end-to-end check against real hinted data on the test room was interrupted by a
+port collision with the user's own separate real install (`D:\Archipelago\ArchipelagoLauncher.exe`)
+also running on the default 8422 -- rebuilt the .apworld locally instead so the user can verify
+directly in that real install.
+
+## Update 2026-08-29 (last): deterministic sequential port fallback, and it uncovered why this session's port collisions kept happening
+
+Per user request: `start_server()` now tries `preferred_port`, then `preferred_port + 1`,
+`+ 2`, ... sequentially (up to `_MAX_PORT_ATTEMPTS = 50`) instead of falling back to an OS-assigned
+random port -- landing on a predictable port (usually just one above the default) instead of some
+arbitrary high one that has to be looked up, which is also what let today's earlier collision with
+the user's own real install (`D:\Archipelago`'s `ArchipelagoLauncher.exe`, also on port 8422 by
+default) resolve itself immediately once actually implemented.
+
+**Also fixed the reason a naive version of this wouldn't have worked at all**: `http.server.
+HTTPServer` sets `allow_reuse_address = True` by default. On Windows, `SO_REUSEADDR` does not mean
+"reuse a socket stuck in TIME_WAIT" like it does on Unix -- it means a second, completely unrelated
+process can bind the *exact same port* an already-listening server is using, and the `bind()` call
+just silently succeeds instead of raising `OSError`. That's what actually caused this session's
+confusing "why is `total_hinted_in_logic` `None`" and "two tabs, unpredictable which one responds"
+moments earlier today: this dev instance and the user's separate real install had both silently
+bound port 8422 at once, with requests routed unpredictably between the two -- not a bug in the
+hint feature itself. Added `_StrictPortServer(ThreadingHTTPServer)` with `allow_reuse_address =
+False` and used that instead, so a real conflict now correctly raises and the fallback loop actually
+triggers.
+
+Verified with two dedicated tests (a plain blocking socket, and -- the scenario that actually
+matters -- a *reuse-enabled* `HTTPServer` blocker, matching what any other unrelated process
+including this tool's old code would do by default) plus a live run against the user's actual real
+install: confirmed via `Get-NetTCPConnection` that the dev instance correctly logged "port 8422 is
+in use, trying the next one" and landed cleanly on 8423, both instances independently reachable at
+the same time.
+
+Also, per user request: reordered the metrics row so "Hinted in logic" appears right after "Slots
+watched" (more prominent, near the top of the summary), and added "Hinted in logic (low-high/
+high-low)" to the sort dropdown, mirroring the existing "Checks in logic" sort pattern.
+
+Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with all of the above for the user to
+drop into their real install.

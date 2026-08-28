@@ -19,7 +19,13 @@ class MultiSlotTrackerSettings(Group):
     class PollIntervalSeconds(int):
         """How often (in seconds) to re-poll the webhost tracker API in poll mode."""
 
+    class WebUiPort(int):
+        """Local port the browser dashboard is served on (http://127.0.0.1:<port>). If this port is
+        already in use, the next free one is picked automatically and shown in the launcher
+        window -- this is only the preferred/starting port, not a guarantee."""
+
     player_files_path: TrackerPlayersPath = TrackerPlayersPath("Players")
     default_source: DefaultSource | str = "poll"
     tracker_api_base_url: TrackerApiBaseUrl | str = "https://archipelago.gg"
     poll_interval_seconds: PollIntervalSeconds | int = 30
+    webui_port: WebUiPort | int = 8422

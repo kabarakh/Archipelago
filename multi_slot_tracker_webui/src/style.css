@@ -1,0 +1,89 @@
+:root {
+  --bg: #050e1f;
+  --bg-elevated: #0b1c33;
+  --surface: #0f2540;
+  --surface-high: #15304f;
+  --border: #2a4870;
+  --text: #e8eef7;
+  --text-muted: #93a7c4;
+  --accent: #5aa9e6;
+  --accent-strong: #7ec8ff;
+  --on-accent: #04101f;
+  --positive-bg: #123d34;
+  --positive-fg: #6fe0c4;
+  --caution-bg: #3d2f12;
+  --caution-fg: #f0c26a;
+  --neutral-bg: #1c2c44;
+  --neutral-fg: #9fb2cf;
+  --hinted-bg: #2f1f42;
+  --hinted-fg: #c9a3f5;
+  --error-bg: #3d1420;
+  --error-fg: #ff9fb0;
+  --radius: 10px;
+  font-family: "Segoe UI", Roboto, system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, button {
+  font-size: 14px;
+}
+
+.pill-button {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent-strong);
+  padding: 8px 16px;
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pill-button:hover {
+  border-color: var(--accent);
+}
+
+.pill-button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge.positive { background: var(--positive-bg); color: var(--positive-fg); }
+.badge.caution { background: var(--caution-bg); color: var(--caution-fg); }
+.badge.accent { background: var(--accent); color: var(--on-accent); }
+.badge.neutral { background: var(--neutral-bg); color: var(--neutral-fg); }
+.badge.hinted { background: var(--hinted-bg); color: var(--hinted-fg); }
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
