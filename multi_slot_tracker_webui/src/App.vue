@@ -7,6 +7,11 @@ import { fetchState, requestRefresh, submitRoom, submitSelection } from './api.j
 
 const STATE_POLL_MS = 1000
 
+// __MST_VERSION__ is injected at build time from archipelago.json's world_version -- see
+// vite.config.js's `define`. Not a ref: it's fixed for the lifetime of this bundle, no reason to
+// make it reactive.
+const mstVersion = __MST_VERSION__
+
 const serverState = ref({
   room_loaded: false,
   selection_confirmed: false,
@@ -166,7 +171,7 @@ const visibleSlots = computed(() => {
 
     <div class="header-row">
       <div class="header-text">
-        <h1>Multi-slot tracker</h1>
+        <h1>Multi-slot tracker <span class="version-tag">v{{ mstVersion }}</span></h1>
         <p class="subtitle">{{ subtitle }}</p>
       </div>
       <div class="header-actions">
@@ -302,6 +307,13 @@ const visibleSlots = computed(() => {
 .header-text h1 {
   margin: 0;
   font-size: 24px;
+}
+
+.version-tag {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+  vertical-align: middle;
 }
 
 .subtitle {

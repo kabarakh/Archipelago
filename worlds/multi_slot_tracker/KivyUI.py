@@ -11,7 +11,9 @@ still matches Archipelago's other Kivy clients visually, same as before.
 
 from __future__ import annotations
 
+import json
 import webbrowser
+from importlib import resources
 
 import kvui  # noqa: F401  -- must be imported before any other kivy/kivymd import (sets up env, see kvui.py)
 
@@ -24,12 +26,27 @@ from kivymd.uix.textfield import MDTextField
 from kvui import ThemedApp
 
 
-class LauncherApp(ThemedApp):
-    title = "Multi Slot Tracker"
+def _read_world_version() -> str:
+    """archipelago.json's world_version is the single source of truth for the version shown in
+    both UIs (see vite.config.js's `define` for the browser side's build-time equivalent of this).
+    Reads via importlib.resources rather than a plain file path, same reason WebServer.py's static
+    file serving does -- a packaged .apworld is loaded via zipimport straight out of its zip file,
+    never extracted to disk first, so plain pathlib reads silently find nothing there."""
+    try:
+        manifest_text = (resources.files(__package__) / "archipelago.json").read_text(encoding="utf-8")
+        return json.loads(manifest_text).get("world_version", "?")
+    except Exception:
+        return "?"
 
+
+class LauncherApp(ThemedApp):
     def __init__(self, url: str, **kwargs):
         self.url = url
+        self.mst_version = _read_world_version()
         super().__init__(**kwargs)
+        # title is a real Kivy Property (App.title) -- needs __init__ to have run first to set up
+        # its underlying storage, unlike plain attributes like self.url/self.mst_version above.
+        self.title = f"Multi Slot Tracker v{self.mst_version}"
 
     def build(self):
         self.set_colors()
@@ -40,8 +57,8 @@ class LauncherApp(ThemedApp):
                             md_bg_color=t.backgroundColor)
 
         root.add_widget(MDLabel(
-            text="Multi Slot Tracker", theme_text_color="Custom", text_color=t.onBackgroundColor,
-            font_style="Headline", role="small", adaptive_height=True,
+            text=f"Multi Slot Tracker v{self.mst_version}", theme_text_color="Custom",
+            text_color=t.onBackgroundColor, font_style="Headline", role="small", adaptive_height=True,
         ))
         root.add_widget(MDLabel(
             text="The dashboard runs in your browser. It opened automatically -- if it didn't, "

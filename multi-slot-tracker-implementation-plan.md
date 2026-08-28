@@ -728,3 +728,44 @@ high-low)" to the sort dropdown, mirroring the existing "Checks in logic" sort p
 
 Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with all of the above for the user to
 drop into their real install.
+
+## Update 2026-08-29 (last): live per-slot connections scoped out, not built -- documented the resulting limitation instead
+
+Investigated (protocol-level, no code) whether "live" per-slot connections could work with a single
+connection covering every slot, per user request, before deciding whether to build it:
+
+- **One connection cannot cover every slot.** `MultiServer.py`'s `Connect` handler computes
+  `missing_locations`/`checked_locations` from `team, slot = ctx.connect_names[args['name']]` --
+  strictly scoped to whichever slot name authenticated. No broadcast/admin/spectator path exposes
+  another slot's location universe from one connection; each slot would need its own.
+- **Passwords, revised twice during discussion**: this vanilla checkout only has one room-wide
+  `ctx.password` (not found per-slot anywhere in this codebase) -- but the user has real experience
+  with multiworld setups that *do* have a per-slot password mechanism, which doesn't exist in any
+  branch visible here (a fork/custom deployment feature). The design has to assume "unknown until
+  you try, ask per-slot on rejection" rather than "one shared password unlocks everything", since
+  that assumption would silently break against the fork the user knows to exist.
+- Sketched a concrete shape if it were ever built: opt-in per confirmed-selected slot only (never
+  the full slot list), persistent connections held for the app's lifetime (not reopened per poll
+  cycle -- actually *less* server chatter than polling once connected), the same `"Tracker"` tag
+  UT's own client uses, a soft warning past some connection-count threshold, and merging the real
+  server-reported `missing_locations` onto the regenerated world to fix exactly the KH2-style
+  location-set mismatch found in the previous entry.
+
+**Decision: not building this.** Per explicit user instruction, instead documented the resulting
+limitation clearly rather than building the fix:
+
+- `docs/README.md`: rewrote the "Compatibility tiers" section (it had gone stale describing
+  pre-YAML-generation behavior) and added a new "Known limitation: check counts can be slightly off
+  for some games" section explaining the regeneration-vs-real-data root cause in general terms (not
+  KH2-specific), referencing the KH2 investigation in this file for anyone who wants the full trace.
+  Also fixed the equally stale "Status" and `player_files_path` descriptions while touching this file
+  (both still described the tool as pre-YAML-generation, e.g. "reserved for a future YAML-based
+  fallback; unused by the poll source" -- long since untrue).
+- **In-app tooltip**: `SlotRow.vue`'s compatibility badge (`slot_data`/`yaml_required` only --
+  `unknown_game` never computes anything, so the caveat doesn't apply there) now carries a `title`
+  explaining the same thing concisely, so a user hitting this doesn't have to already know to check
+  the docs.
+- Also, per user request: replaced the default Vite favicon with Archipelago's own icon
+  (`data/icon.png`, copied to `multi_slot_tracker_webui/public/archipelago-icon.png`).
+
+Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with all of the above.

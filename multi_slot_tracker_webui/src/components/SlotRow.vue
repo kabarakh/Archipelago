@@ -11,6 +11,17 @@ const COMPAT_ROLE = { slot_data: 'positive', yaml_required: 'caution', unknown_g
 const compatLabel = computed(() => COMPAT_LABEL[props.slot.compatibility] ?? props.slot.compatibility)
 const compatRole = computed(() => COMPAT_ROLE[props.slot.compatibility] ?? 'neutral')
 
+// Only slot_data/yaml_required tiers actually regenerate a world to compute logic -- unknown_game
+// never computes anything at all, so the "counts can be slightly off" caveat doesn't apply to it.
+const REGEN_CAVEAT =
+  "Computed by regenerating this slot's world, not by reading the room's actual generated data. " +
+  'For most games that\'s fine, but a few games make random choices during generation that decide ' +
+  'which locations even exist -- for those, counts can be slightly off from what a live-connected ' +
+  "client would show. Not a bug; see the app's docs for why."
+const compatTitle = computed(() =>
+  props.slot.compatibility === 'unknown_game' ? undefined : REGEN_CAVEAT,
+)
+
 const openCount = computed(() => props.slot.total_locations - props.slot.checked)
 const progressPct = computed(() =>
   props.slot.total_locations > 0 ? Math.round((props.slot.checked / props.slot.total_locations) * 100) : 0,
@@ -26,7 +37,7 @@ const progressPct = computed(() =>
       </div>
       <div class="slot-badges">
         <span v-if="slot.source === 'live'" class="badge accent">Live</span>
-        <span class="badge" :class="compatRole">{{ compatLabel }}</span>
+        <span class="badge" :class="compatRole" :title="compatTitle">{{ compatLabel }}</span>
       </div>
     </div>
 

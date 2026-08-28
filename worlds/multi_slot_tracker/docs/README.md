@@ -45,7 +45,11 @@ changing `WebServer.py`/`Client.py` itself needs the app relaunched, same as any
 
 First version. Only the **poll** data source is implemented: it reads the webhost's public
 per-room tracker API (no slot password needed, works as long as the room has a public tracker
-UUID). A **live** (per-slot client connection) source is planned but not implemented yet.
+UUID). A **live** (per-slot client connection) source was scoped out (see
+`multi-slot-tracker-implementation-plan.md`'s "live per-slot connections" entry for the full
+feasibility writeup -- what it would take, why one connection can't cover every slot, and the
+password/connection-count tradeoffs involved) but a deliberate decision was made not to build it;
+see "Known limitation" below for what that means in practice.
 
 ## Privacy: nothing is remembered between runs
 
@@ -72,7 +76,9 @@ Deliberately minimal -- see above for why room/slot state isn't among them.
 - `tracker_api_base_url`: which webhost to talk to, e.g. `https://archipelago.gg`. This is just the
   server, not a specific room.
 - `poll_interval_seconds`: how often to re-poll (default 30).
-- `player_files_path`: reserved for a future YAML-based fallback; unused by the poll source.
+- `player_files_path`: folder to look for YAMLs in, for slots that need one (`yaml_required` tier
+  below) -- same "Players" folder any Archipelago install already has. A slot with no matching YAML
+  here just shows raw checked/total counts instead of full logic numbers.
 - `webui_port`: local port the browser dashboard is served on (default 8422). If it's already taken,
   the next free port is picked automatically and shown in the launcher window -- this is only the
   preferred/starting port, not a guarantee.
@@ -96,12 +102,41 @@ out-of-logic checks / go mode) only affect what's currently displayed, not what'
 
 Per slot, depending on whether the tracked game's apworld defines `interpret_slot_data`:
 
-- **slot_data** -- full logic numbers, reconstructed from the room's `slot_data` without a YAML.
-  Even here, if the world only implements the older instance-method style of `interpret_slot_data`
-  (not `ut_can_gen_without_yaml`), a real YAML would still be required and the slot is reported with
-  an error instead of guessed numbers.
-- **yaml_required** -- no `interpret_slot_data` hook at all; only raw checked/total counts are shown.
+- **slot_data** -- full logic numbers, reconstructed from the room's `slot_data` without needing a
+  YAML on disk. Even here, if the world only implements the older instance-method style of
+  `interpret_slot_data` (not `ut_can_gen_without_yaml`), a real YAML would still be required and the
+  slot falls through to the case below instead.
+- **yaml_required** -- needs a matching YAML in `player_files_path` to compute full logic numbers at
+  all (regenerated the same way a real Universal Tracker client would, from that YAML); without a
+  match, only raw checked/total counts are shown, no in-logic/out-of-logic breakdown.
 - **unknown_game** -- the apworld isn't installed locally; slot stays listed, marked accordingly.
 
 "Out of logic but reachable" is only ever shown for games that define `glitches_item_name`; there is
 no generic "ignore all logic" mode (not a UT feature, see design doc section 6).
+
+## Known limitation: check counts can be slightly off for some games
+
+Both tiers above that compute real logic numbers do it by **regenerating a `World` object** from
+either `slot_data` or a YAML -- neither ever downloads the room's actual, already-generated
+multiworld. For the vast majority of games this is fine: the region/rule graph a world builds is a
+pure function of its options, so regenerating it (even with a fresh random seed, since this tool
+never has the room's real one) reliably reproduces the same logic structure the real room has.
+
+**A minority of games make randomized decisions *during generation itself* that affect which
+locations exist at all** -- not just where items land, which locations exist in the first place.
+Kingdom Hearts 2 is a concrete example found while investigating a real discrepancy (see
+`multi-slot-tracker-implementation-plan.md`'s "why UT live-connect shows a different number" entry
+for the full trace): it randomly picks a set of "bounty" locations during its own `generate_early()`
+and removes each one from the normal location pool. That random pick depends on the room's true
+original seed and, in a shared multiworld, on the exact order every other player's world generates
+in -- neither of which this tool has access to. Regenerating with a fresh seed can therefore end up
+with a *different* total location count (and different reachability) than the real room, for these
+specific games only. This isn't a bug in this tool's counting logic; it's a structural limit of
+regenerating from options/YAML alone rather than reading the real generated output.
+
+A live, per-slot connection to the actual running server *would* sidestep this (it can merge the
+real, server-reported location set onto the regenerated world instead of trusting the regenerated
+world's own guess) -- this was scoped out in detail but deliberately not built; see the
+implementation plan for why. If a slot's numbers look off and the game in question is known to
+randomize location existence at generation time (not just item placement), this is almost certainly
+why -- there isn't a workaround short of that live-connection feature.
