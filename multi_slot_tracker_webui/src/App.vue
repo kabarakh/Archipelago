@@ -20,7 +20,19 @@ const serverState = ref({
   error: null,
   dashboard: null,
 })
+// Remembers only the room text itself, in this browser's localStorage -- never the slot selection,
+// and never auto-connects on its own. Pre-fills the field so re-entering the same room doesn't
+// mean retyping/re-pasting the UUID every single time, while still requiring the user to
+// consciously hit Load each session (the actual privacy-relevant step -- reading another player's
+// progress -- stays an explicit action every time, exactly as before).
+const ROOM_STORAGE_KEY = 'mst_last_room'
 const roomText = ref('')
+try {
+  roomText.value = localStorage.getItem(ROOM_STORAGE_KEY) || ''
+} catch {
+  // localStorage can throw (private browsing, disabled site data, ...) -- fall back to empty,
+  // same as before this feature existed.
+}
 const localSubmitError = ref(null)
 
 const pickerOpen = ref(false)
@@ -90,6 +102,11 @@ async function loadRoom() {
   try {
     await submitRoom(text)
     await refreshState()
+    try {
+      localStorage.setItem(ROOM_STORAGE_KEY, text)
+    } catch {
+      // non-fatal -- the room still loaded fine, it just won't be pre-filled next time.
+    }
   } catch (e) {
     localSubmitError.value = e.message
   }

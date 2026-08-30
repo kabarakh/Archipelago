@@ -769,3 +769,52 @@ limitation clearly rather than building the fix:
   (`data/icon.png`, copied to `multi_slot_tracker_webui/public/archipelago-icon.png`).
 
 Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with all of the above.
+
+## Update 2026-08-29 (last): version number shown in both UIs, `archipelago.json` as the single source of truth
+
+Per user request: `world_version` (bumped to `0.1.1` for the user's manual release) now shows in
+both places, each reading the same `archipelago.json` field rather than duplicating the number:
+
+- **Browser UI**: `vite.config.js` reads `archipelago.json`'s `world_version` at build time (Node
+  `fs.readFileSync`) and bakes it into the bundle via Vite's `define` (`__MST_VERSION__`) -- a real
+  build-time constant, not a runtime fetch. `App.vue` shows it next to the "Multi-slot tracker"
+  title (`v0.1.1`). Verified the literal string ends up in the built JS bundle after `npm run build`.
+- **Kivy launcher**: no separate "build" step exists for plain Python, so `KivyUI.py` reads
+  `archipelago.json` at *runtime* instead, via `importlib.resources` (same zip-safe pattern as
+  `WebServer.py`'s static file serving -- a packaged `.apworld` is zipimported, never extracted to
+  disk, so a plain file path read would silently fail there same as before). Shown both in the
+  window's title bar (`self.title`, set *after* `super().__init__()` -- it's a real Kivy `Property`
+  and assigning to it before `__init__` runs fails, unlike the plain `self.url` attribute already
+  set before that call) and in the window body's heading label.
+- Verified live: launched the real app, screenshotted the Kivy window (title bar and body both
+  correctly show "v0.1.1"), and confirmed the served browser bundle is the exact file already
+  verified to contain the "0.1.1" string.
+
+Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with `world_version: "0.1.1"` for the
+user's manual release.
+
+## Update 2026-08-29 (last): room text field pre-fills from the last successful load, still never auto-connects
+
+Per explicit user request -- a deliberate, narrow relaxation of the original "nothing is remembered"
+privacy decision, not a reversal of it: the **Room** field now pre-fills with the last room
+text that was actually successfully submitted, saved in the browser's own `localStorage`
+(`mst_last_room`, per browser/profile, never touches the Python side/`host.yaml`). Implemented
+entirely in `App.vue`: read on setup (wrapped in try/catch -- localStorage can throw in private
+browsing/disabled-site-data cases, falls back to empty exactly like before this feature existed),
+written only after `submitRoom()` succeeds (a failed/typo'd room reference is never remembered).
+
+**Still never auto-connects** -- this was the explicit, careful boundary of the request, and is
+just as important as the pre-fill itself: nothing calls `submitRoom()`/`loadRoom()` on mount, only
+`roomText.value` gets set. Verified concretely, not just by code inspection: submitted a real room,
+confirmed `localStorage` held it, then did a full **backend restart** (genuinely blank
+`SharedState`, `room_loaded: false`) and reloaded the page -- the field correctly showed the saved
+room text while `GET /api/state` still reported `room_loaded: false` and zero available slots,
+proving the restore is purely a text pre-fill with no side effect on the backend at all. The slot
+*selection* itself remains entirely unremembered, as does the room's actual data -- only the text
+you'd otherwise have to retype/re-paste survives.
+
+Updated `docs/README.md`'s privacy section to describe this precisely (was previously titled
+"nothing is remembered between runs", now accurately scoped to "nothing loads or is watched
+automatically" since the room text technically is now remembered, just never acted on by itself).
+
+Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with this.

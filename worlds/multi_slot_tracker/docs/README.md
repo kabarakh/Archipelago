@@ -51,22 +51,27 @@ feasibility writeup -- what it would take, why one connection can't cover every 
 password/connection-count tradeoffs involved) but a deliberate decision was made not to build it;
 see "Known limitation" below for what that means in practice.
 
-## Privacy: nothing is remembered between runs
+## Privacy: nothing loads or is watched automatically between runs
 
-The app never persists which room was watched or which slots were selected -- no `host.yaml`
-setting, no on-disk cache. Every time it starts:
+The app never persists *which slots were selected*, and never reconnects to anything on its own --
+no `host.yaml` setting, no on-disk cache, no auto-loading. Every time it starts:
 
-1. The **Room** field in the window is empty; a room/tracker URL (or bare UUID) must be typed or
-   pasted in and submitted (Enter or the Load button) before anything happens.
+1. The **Room** field is pre-filled with the last room text you actually submitted (saved in the
+   browser's own `localStorage`, per browser/profile -- nothing sent to or stored by the Python
+   side), purely to save retyping/re-pasting the same UUID. It is *not* auto-submitted: nothing
+   loads, and no data is read, until you consciously hit Load/Enter yourself, exactly as before this
+   convenience was added.
 2. As soon as the slot list for that room is fetched, a **slot picker** (search + checkboxes)
    opens automatically, and the poll loop does not compute anything until it's been confirmed
    (Apply) or explicitly skipped (Cancel, which defaults to watching everything). This is
    deliberate, not just a UX nicety -- anyone reading other players' progress should have their
    consent, and requiring this choice fresh each session is part of that, not a one-time opt-in
-   that's then forgotten about.
+   that's then forgotten about. The slot *selection* itself is never remembered between runs, only
+   the room text field's convenience pre-fill described above.
 
-Both the room and the slot selection only live in memory for the running process; closing the
-window and starting it again requires doing both again.
+The slot selection and everything computed only live in memory for the running process; closing
+the window and starting it again requires re-confirming (or re-skipping) the slot picker every
+time, same as always -- only the room text field's pre-fill survives a restart.
 
 ## Settings (`host.yaml`, section `multi_slot_tracker`)
 
