@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .Aggregator import DashboardData
 from .Compatibility import check_compatibility, supports_yamlless_regen
 from .DataSource import PollSource, SlotFetchError, parse_room_reference
-from .LogicEngine import build_yaml_launch_core, compute_slot_logic, compute_slot_logic_via_yaml
+from .LogicEngine import build_yaml_launch_core, clear_yaml_core_cache, compute_slot_logic, compute_slot_logic_via_yaml
 from .WebServer import SharedState, start_server
 
 logger = logging.getLogger("MultiSlotTracker")
@@ -129,26 +128,20 @@ def _poll_loop(holder: _SourceHolder, state: SharedState, refresh_event: threadi
 
             if yaml_slots:
                 # One shared TrackerCore for the whole group: generating from every YAML in
-                # player_files_path is the expensive part and only needs to happen once per cycle,
-                # not once per slot (see build_yaml_launch_core's docstring) -- so this runs
-                # sequentially, reusing that one generated multiworld per slot.
+                # player_files_path is the expensive part, and build_yaml_launch_core() now caches
+                # it process-wide across poll cycles (only regenerating if the folder's contents
+                # actually changed) -- see its docstring. Its temp dir (if any) is owned by that
+                # cache now, not by this call site, so there's deliberately no cleanup here anymore;
+                # see clear_yaml_core_cache(), called once at app shutdown in launch() below.
                 yaml_core = build_yaml_launch_core(player_files_path)
-                try:
-                    for slot_id, _name, _game in yaml_slots:
-                        try:
-                            results.append(compute_slot_logic_via_yaml(
-                                snapshots[slot_id], yaml_core, fetch_slot_data=slot_data_by_id.get
-                            ))
-                        except Exception:
-                            logger.exception(f"Multi Slot Tracker: failed to compute slot {slot_id}")
-                        maybe_push()
-                finally:
-                    # only set when build_yaml_launch_core had to fall back to a filtered copy of
-                    # player_files_path (one or more invalid YAMLs there -- see its docstring); that
-                    # copy is ours to clean up, unlike the user's own player_files_path.
-                    temp_dir = getattr(yaml_core, "mst_temp_dir", None)
-                    if temp_dir:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
+                for slot_id, _name, _game in yaml_slots:
+                    try:
+                        results.append(compute_slot_logic_via_yaml(
+                            snapshots[slot_id], yaml_core, fetch_slot_data=slot_data_by_id.get
+                        ))
+                    except Exception:
+                        logger.exception(f"Multi Slot Tracker: failed to compute slot {slot_id}")
+                    maybe_push()
 
             state.push_dashboard(DashboardData.build(results))
         except SlotFetchError as e:
@@ -233,6 +226,9 @@ def launch(*args) -> None:
         app.run()  # blocks until the launcher window is closed
     finally:
         server.shutdown()
+        # frees any cached shared-yaml-core temp dir(s) -- see build_yaml_launch_core's docstring;
+        # the cache owns that lifetime for the whole run, this is the one place it gets released.
+        clear_yaml_core_cache()
 
 
 if __name__ == "__main__":

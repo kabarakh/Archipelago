@@ -97,9 +97,12 @@ name instead of a "Player N" placeholder (the tracker-only API only ever exposes
 slots had one, and it didn't even match the slot's actual name). Any webhost host works, not just
 archipelago.gg, so self-hosted instances are fine too.
 
-Once the slot picker appears, narrow the list down (search by name/game, or Select/Deselect
-visible) and hit Apply, or Cancel to watch every slot in the room. The **Select slots...** button
-in the header reopens the same picker later to change the selection without reloading the room.
+Once the slot picker appears, it starts with nothing checked -- pick the slots to watch (search by
+name/game, or Select/Deselect visible) and hit Apply. Nothing is watched by default, deliberately:
+picking has to be an explicit action so nobody's slots end up watched just because the picker was
+dismissed without thinking about it. Cancel (or closing without picking anything) confirms watching
+*nothing*, not everything -- the **Select slots...** button in the header reopens the same picker
+later to actually pick some without reloading the room.
 The game filter, tier filter, and the three condition toggles (has in-logic checks / has
 out-of-logic checks / go mode) only affect what's currently displayed, not what's computed.
 

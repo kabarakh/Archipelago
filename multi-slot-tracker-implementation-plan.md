@@ -818,3 +818,50 @@ Updated `docs/README.md`'s privacy section to describe this precisely (was previ
 automatically" since the room text technically is now remembered, just never acted on by itself).
 
 Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with this.
+
+## Update 2026-08-29 (last): shared-yaml TrackerCore cached across poll cycles, not regenerated every time
+
+User observation, confirmed correct: `build_yaml_launch_core()` (generates the *entire* shared
+multiworld from every YAML in `player_files_path`) ran fresh on **every single poll cycle**, even
+though the YAMLs on disk essentially never change between cycles in normal use -- the single most
+expensive thing this tool does, repeated for no reason every `poll_interval_seconds`.
+
+**Fix**: `LogicEngine.py` now caches the built core process-wide, keyed by `player_files_path`
+(`_yaml_core_cache`), invalidated only by a cheap fingerprint of the folder's actual contents
+(`_player_folder_signature` -- `(name, size, mtime)` per file, non-recursive). An unchanged folder
+now returns the *same* core object instantly; editing/adding/removing a YAML correctly triggers a
+real regeneration next call. Ownership of the core's temp dir (only set when one or more invalid
+YAMLs forced a filtered copy -- see the exclusion-retry logic above) moved from "caller cleans up
+after each use" to "the cache owns it for as long as that entry is valid" -- `Client.py`'s per-cycle
+`finally: shutil.rmtree(...)` was removed accordingly, freed instead via `_discard_cached_yaml_core`
+when an entry is invalidated/replaced, or `clear_yaml_core_cache()` once at app shutdown (wired into
+`launch()`'s existing `finally: server.shutdown()` block).
+
+**Bonus side effect worth noting**: this also makes results *more stable* across a session for any
+game whose generation makes its own random choices (like KH2's bounty-target selection, see the
+"why UT live-connect shows a different number" entry) -- those choices are now fixed once per
+session instead of re-rolled every single poll cycle, which was a latent (if unnoticed) additional
+instability on top of the already-documented regeneration-vs-real-data limitation.
+
+Verified with a dedicated test: same folder twice returns the identical cached object (`is`
+identity, not just equal); touching one file's mtime forces a genuinely new object; a synthetic
+cache entry with a temp dir gets that temp dir removed by `_discard_cached_yaml_core`;
+`clear_yaml_core_cache()` sweeps every entry including the real one from this same test. Re-ran the
+existing flicker regression test to confirm nothing else regressed.
+
+**Found and fixed a real, unrelated bug while live-testing this**: clicking **Cancel** on the slot
+picker never called `submitSelection()` at all -- `selection_confirmed` stayed `false` forever,
+permanently gating the poll loop with no way to ever unstick it (the docs' claimed "Cancel to watch
+every slot in the room" was never actually implemented in the Vue rewrite). First fix attempt made
+Cancel confirm "watch everything" (`null`) -- **user corrected this immediately**: the intended
+default is "watch nothing", precisely so nobody's slots end up watched just because the picker was
+dismissed without deliberately picking any -- matches the picker's own existing "starts with nothing
+checked, Apply disabled until >=1 picked" behavior from the earlier "initial slot selection" update.
+Final fix: `cancelPicker()` in `App.vue` calls `applySelection([])` (confirms an explicit *empty*
+selection) when dismissing the picker before anything was ever confirmed; re-opening an
+already-confirmed picker later still treats Cancel as a true no-op (discard edits, keep the existing
+selection). Verified live end-to-end via the real room: `selected_slot_ids` came back as `[]` (not
+`null`) and `selection_confirmed: true` after Cancel on a fresh room load. Updated `docs/README.md`'s
+now-corrected description of Cancel's behavior to match.
+
+Rebuilt `build/apworlds/multi_slot_tracker.apworld` locally with all of the above.

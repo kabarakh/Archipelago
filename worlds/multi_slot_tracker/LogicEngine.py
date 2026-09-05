@@ -252,6 +252,50 @@ _MAX_EXCLUSION_ROUNDS = 10  # backstop against pathological rooms; each round ex
 # full doomed-to-fail generation attempt that goes with each one, on every single poll cycle).
 _known_bad_yaml_cache: dict[str, set[str]] = {}
 
+# Process-wide cache of the shared TrackerCore itself, keyed by player_files_path -- see
+# build_yaml_launch_core's docstring for why this exists: without it, the single most expensive
+# thing this tool does (generating a full multiworld from every YAML in the folder) reran from
+# scratch on *every single poll cycle* even though the YAMLs on disk essentially never change
+# between cycles in normal use. Each entry is (signature, core); the signature is invalidated (and
+# the core rebuilt) only if the folder's actual contents change.
+_yaml_core_cache: dict[str, tuple[tuple, object]] = {}
+
+
+def _player_folder_signature(folder: str) -> tuple:
+    """Cheap fingerprint of a folder's contents (name, size, mtime per file, non-recursive -- same
+    scope _copy_player_folder_excluding()/_resolve_to_basenames() already assume for this folder).
+    Used purely to decide whether a cached TrackerCore is still valid; not a security boundary."""
+    try:
+        entries = []
+        with os.scandir(folder) as it:
+            for entry in it:
+                if entry.is_file():
+                    stat = entry.stat()
+                    entries.append((entry.name, stat.st_size, stat.st_mtime_ns))
+        return tuple(sorted(entries))
+    except OSError:
+        return ()
+
+
+def _discard_cached_yaml_core(player_files_path: str) -> None:
+    """Cleans up a cache entry's temp dir (if it has one) before the entry itself is replaced or
+    dropped -- the only thing that ever owns that temp dir once build_yaml_launch_core() starts
+    caching its result across cycles instead of handing ownership back to the caller each time."""
+    cached = _yaml_core_cache.pop(player_files_path, None)
+    if cached is None:
+        return
+    _, old_core = cached
+    temp_dir = getattr(old_core, "mst_temp_dir", None)
+    if temp_dir:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def clear_yaml_core_cache() -> None:
+    """Cleans up every cached core's temp dir -- call once at app shutdown so a temp directory from
+    the final cached generation doesn't linger after the process exits."""
+    for player_files_path in list(_yaml_core_cache):
+        _discard_cached_yaml_core(player_files_path)
+
 
 def _new_yaml_core(player_folder: str):
     from worlds.tracker.TrackerCore import TrackerCore
@@ -318,11 +362,25 @@ def _copy_player_folder_excluding(source_dir: str, excluded_basenames: set[str])
 
 
 def build_yaml_launch_core(player_files_path: str) -> "TrackerCore":  # noqa: F821 -- imported below
-    """Builds the ONE shared TrackerCore for the real-YAML path this poll cycle: generates the full
+    """Builds (or reuses) the ONE shared TrackerCore for the real-YAML path: generates the full
     multiworld from every YAML in player_files_path, exactly like a live TrackerClient does on
-    connect (TrackerCore.run_generator(None, None)). Expensive (parses + generates every YAML in
-    the folder) -- call this once per cycle, then feed the result into
-    compute_slot_logic_via_yaml() for every slot that needs it, not once per slot.
+    connect (TrackerCore.run_generator(None, None)).
+
+    **Cached process-wide per player_files_path (_yaml_core_cache), not regenerated every call.**
+    This is easily the single most expensive thing this tool does (parsing + generating every YAML
+    in the folder), and the YAMLs on disk essentially never change between one poll cycle and the
+    next in normal use -- regenerating from scratch every single cycle regardless was pure waste,
+    reported live as "does the whole world really get regenerated every time it syncs with the
+    server?". The cache key is a cheap (name, size, mtime) fingerprint of the folder's contents
+    (_player_folder_signature) -- editing/adding/removing a YAML invalidates it and the next call
+    regenerates for real, but an unchanged folder now returns the *same* core object instantly, with
+    all of its consequences: no wasted CPU, and also a *more stable* result across the session for
+    any game whose generation makes its own random choices (see the implementation plan's KH2 entry)
+    -- those choices are now fixed for the whole session instead of re-rolled every cycle.
+
+    Callers must NOT clean up `core.mst_temp_dir` themselves anymore -- the cache owns that
+    lifetime now (freed via _discard_cached_yaml_core when the entry is invalidated, or
+    clear_yaml_core_cache() at app shutdown), not the caller of any individual call.
 
     If one or more YAMLs in the folder are invalid or fail generation, iteratively retries against
     a temp copy of the folder with the offenders excluded (see module comment above
@@ -331,24 +389,28 @@ def build_yaml_launch_core(player_files_path: str) -> "TrackerCore":  # noqa: F8
     then a second, unrelated world failed a hard option-validation check during generation).
     Slots whose own YAML ended up excluded will simply not be found by
     compute_slot_logic_via_yaml() afterwards, same as any other missing YAML -- this never silently
-    drops a slot's *result*, only its contribution to this shared multiworld. Caller is responsible
-    for cleaning up `core.mst_temp_dir` (if not None) once done with the returned core -- it's a
-    temp directory, not the caller's own player_files_path.
+    drops a slot's *result*, only its contribution to this shared multiworld.
 
     The returned core's `launch_multiworld` is None (and `gen_error` set) if generation failed
     outright even after exhausting retries (e.g. the folder is empty, every YAML in it is invalid,
     or _MAX_EXCLUSION_ROUNDS was reached) -- compute_slot_logic_via_yaml() reports that clearly per
-    slot rather than silently returning zero logic.
+    slot rather than silently returning zero logic. A failed result is cached too (by the same
+    signature) -- retrying an unchanged, doomed-to-fail folder every cycle wouldn't help either.
 
     Bad files found this way are remembered process-wide per folder (_known_bad_yaml_cache) and
-    excluded from the very first attempt on every subsequent call -- without this, a folder with N
-    persistently-bad YAMLs (a stale/incompatible one someone never got around to fixing) would pay
-    for a full, doomed-to-fail generation of *every* YAML in the folder on *every single poll
-    cycle* before rediscovering the same exclusions each time. Verified live against a real
-    38-YAML room: each full generation attempt there took long enough that needing 2-3 of them
-    per cycle (one per newly-discovered bad file) meaningfully delayed how soon any slot's data
-    showed up at all.
+    excluded from the very first attempt on every subsequent *regeneration* -- without this, a
+    folder with N persistently-bad YAMLs (a stale/incompatible one someone never got around to
+    fixing) would pay for a full, doomed-to-fail generation of *every* YAML in the folder each time
+    it has to regenerate at all, before rediscovering the same exclusions again. Verified live
+    against a real 38-YAML room: each full generation attempt there took long enough that needing
+    2-3 of them (one per newly-discovered bad file) meaningfully delayed how soon any slot's data
+    showed up.
     """
+    signature = _player_folder_signature(player_files_path)
+    cached = _yaml_core_cache.get(player_files_path)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
     _ensure_ut_player_folder(player_files_path)
 
     all_excluded: set[str] = set(_known_bad_yaml_cache.get(player_files_path, set()))
@@ -385,6 +447,12 @@ def build_yaml_launch_core(player_files_path: str) -> "TrackerCore":  # noqa: F8
     if all_excluded:
         _known_bad_yaml_cache[player_files_path] = all_excluded
     core.mst_temp_dir = current_dir if current_dir != player_files_path else None
+
+    # this call's own regeneration makes whatever was cached before stale by definition (we only
+    # got this far because the signature didn't match, or there was nothing cached yet) -- free its
+    # temp dir now, then take over ownership of this new core's.
+    _discard_cached_yaml_core(player_files_path)
+    _yaml_core_cache[player_files_path] = (signature, core)
     return core
 
 

@@ -5,7 +5,7 @@ from worlds.LauncherComponents import Component, components, Type
 
 from .Settings import MultiSlotTrackerSettings
 
-MST_VERSION = "v0.2.0"
+MST_VERSION = "v0.3.0"
 
 
 class MultiSlotTrackerException(Exception):

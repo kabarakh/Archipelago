@@ -118,6 +118,22 @@ async function applySelection(slotIds) {
   await refreshState()
 }
 
+function cancelPicker() {
+  if (!serverState.value.selection_confirmed) {
+    // The very first, auto-opened picker for a freshly-loaded room, never confirmed yet. The
+    // default is deliberately "watch nothing", not "watch everything" -- explicitly picking slots
+    // via Apply is required, so nobody's own slots end up watched by accident just because they
+    // dismissed the picker without picking anything. Still confirms an (empty) selection rather
+    // than leaving selection_confirmed false forever, though -- that left the poll loop gated
+    // forever with no way to ever unstick it, found live while testing an unrelated change.
+    applySelection([])
+  } else {
+    // Re-opened after a selection was already confirmed once (the "Select slots..." button) --
+    // Cancel here is a true no-op: discard whatever was being edited, keep the existing selection.
+    pickerOpen.value = false
+  }
+}
+
 // The picker's own contract is simple (an array of ids that start checked -- see its docstring);
 // the "null means all slots, including future ones" meaning `selected_slot_ids` carries on the
 // backend only applies *after* a selection has actually been confirmed at least once, so it's
@@ -257,7 +273,7 @@ const visibleSlots = computed(() => {
       :available="serverState.available_slots"
       :initial-selection="pickerInitialSelection"
       @apply="applySelection"
-      @cancel="pickerOpen = false"
+      @cancel="cancelPicker"
     />
 
     <div v-if="connectionLost" class="connection-lost-backdrop">
